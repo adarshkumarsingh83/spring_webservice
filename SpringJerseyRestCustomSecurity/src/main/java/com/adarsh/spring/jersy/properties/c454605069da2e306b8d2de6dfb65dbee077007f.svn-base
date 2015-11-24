@@ -1,0 +1,122 @@
+/*
+ * Copyright ©Adarsh Development Services
+ * All Rights Reserved.
+ */
+package com.adarsh.spring.persistence.entity.construct;
+
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.persistence.*;
+import java.io.Serializable;
+import java.net.InetAddress;
+import java.util.Calendar;
+
+/**
+ * @author Adarsh
+ * @author $LastChangedBy: adarsh $
+ * @version $Revision: 0001 $, $Date:: 1/1/13 00:11 AM#$
+ *          <p/>
+ *          AbstractEntity is the component which lay down the basic foundation
+ *          for creating the Identifiable Entity class having default implementation
+ *          for Identifiable Entity class and all the common properties are by default
+ *          available in the Entity class through inheritance.
+ *          Its a implementation of Adapter Design Pattern
+ * @see  com.adarsh.spring.persistence.entity.construct.Entity
+ */
+
+/*
+ * {@inheritDoc}
+ */
+@MappedSuperclass
+public abstract class IdentifiableAbstractEntity<K extends Serializable>
+        implements  com.adarsh.spring.persistence.entity.construct.Entity<K> {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(IdentifiableAbstractEntity.class);
+    @Temporal(TemporalType.TIMESTAMP)
+    @Column(name = "CREATED_DATE", nullable = true)
+    final protected Calendar createdDate = Calendar.getInstance();
+    @Column(name = "CREATED_BY", nullable = true, length = 100)
+    final protected String createdBy = System.getProperty("user.name") + _getHost();
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(insertable = true, nullable = false, unique = true, updatable = true)
+    protected Integer id;
+    @Temporal(TemporalType.TIMESTAMP)
+    @Column(name = "UPDATED_DATE", nullable = true, length = 7)
+    protected Calendar updatedDate = Calendar.getInstance();
+    @Column(name = "UPDATED_BY", nullable = true, length = 100)
+    protected String updatedBy = System.getProperty("user.name") + _getHost();
+    @Column(name = "record_active", nullable = false)
+    protected Integer active = ACTIVE;
+
+    protected IdentifiableAbstractEntity(Class<? extends  com.adarsh.spring.persistence.entity.construct.Entity> entity) {
+        final Class<? extends  com.adarsh.spring.persistence.entity.construct.Entity> entityObject = entity;
+    }
+
+    /**
+     * prePersist() is Callback method
+     * which is automatically called by the
+     * Hibernate before persisting any
+     * Entity object and operation related to
+     * Pre persisting of the Entity object
+     */
+    @PrePersist
+    protected void prePersist() {
+    }
+
+    /**
+     * preUpdate() is Callback method
+     * which is automatically called by the
+     * Hibernate before Updating any
+     * Entity object
+     */
+    @PreUpdate
+    protected void preUpdate() {
+    }
+
+    /**
+     * preRemove() is Callback method
+     * which is automatically called by the
+     * Hibernate before Removing andy
+     * Entity object from the database
+     */
+    @PreRemove
+    protected void preRemove() {
+    }
+
+
+    /**
+     * postPersist() is Callback method
+     * which is automatically called by the
+     * Hibernate after persisting any
+     * Entity object and operation related to
+     * Pre persisting of the Entity object
+     */
+    @PostPersist
+    protected void postPersist() {
+    }
+
+    /**
+     * postUpdate() is Callback method
+     * which is automatically called by the
+     * Hibernate after Updating any
+     * Entity object
+     */
+    @PostUpdate
+    protected void postUpdate() {
+    }
+
+    /**
+     * postRemove() is Callback method
+     * which is automatically called by the
+     * Hibernate after Removing andy
+     * Entity object from the database
+     */
+    @PostRemove
+    protected void postRemove() {
+    }
+
+    /**
+     * postLoad() is Callback method

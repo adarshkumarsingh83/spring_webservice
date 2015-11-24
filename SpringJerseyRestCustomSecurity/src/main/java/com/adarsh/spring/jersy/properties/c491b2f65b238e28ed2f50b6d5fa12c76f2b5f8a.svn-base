@@ -1,0 +1,123 @@
+ 
+
+
+<div class="span9">
+		 
+                    	<!--<div id="calendar"></div>-->
+        
+			<div class="pull-left">
+			<div class="btn-group">
+			  <button class="btn"><</button>
+			  <button class="btn">></button>
+			  <button class="btn">today</button>
+			</div>
+			</div>
+
+			<div class="pull-right">
+			<ul class="nav nav-pills">
+			  <li class="active">
+				<a href="#">Month</a>
+			  </li>
+			  <li><a href="#">Day</a></li>
+			</ul>
+			</div> 
+
+
+		<table class="table table-bordered">
+		<thead>
+		  <tr>
+			<th class="span2">Sun</th>
+			<th class="span2">Mon</th>
+			<th class="span2">Tue</th>
+			<th class="span2">Wed</th>
+			<th class="span2">Thur</th>
+			<th class="span2">Fri</th>
+			<th class="span2">Sat</th>
+		  </tr>
+		  
+			<tr>
+			<td class="span2">1<br>
+		   </th>
+			<td class="span2">2
+			<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">3
+			<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">4
+			<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">5
+			<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">6
+			<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">7</th>
+		  </tr>
+		  
+		  <tr>
+			<td class="span2">8<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">9<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">10<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">11<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">12</th>
+			<td class="span2">13</th>
+			<td class="span2">14</th>
+		  </tr>
+		  <tr>
+			<td class="span2">15</th>
+			<td class="span2">16</th>
+			<td class="span2">17</th>
+			<td class="span2">18<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">19<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">20</th>
+			<td class="span2">21</th>
+		  </tr>
+		  <tr>
+			<td class="span2">22</th>
+			<td class="span2">23</th>
+			<td class="span2">24</th>
+			<td class="span2">25<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">26</th>
+			<td class="span2">27</th>
+			<td class="span2">28</th>
+		  </tr>
+		  <tr>
+			<td class="span2">29<br>
+			<span class="label">Batch 1</span>
+			<span class="label">Batch 2</span></th>
+			<td class="span2">30</th>
+			<td class="span2"></th>
+			<td class="span2"></th>
+			<td class="span2"></th>
+			<td class="span2"></th>
+			<td class="span2"></th>
+		  </tr>
+		  
+		  </thead>
+			
+		</table>
+</div>
+					
+<br />
+<br />
