@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="true" scanPeriod="1000000 seconds">
+
+
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <layout class="ch.qos.logback.classic.PatternLayout">
+            <Pattern>%d{yyyy-MM-dd_HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</Pattern>
+        </layout>
+    </appender>
+
+    <appender name="rollingFileAppender"
+              class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${APPLICATION_HOME}/log/applicationLogFile.log</file>
+        <layout class="ch.qos.logback.classic.PatternLayout">
+            <Pattern>%d{yyyy-MM-dd_HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</Pattern>
+        </layout>
+
+        <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+            <FileNamePattern>${APPLICATION_HOME}/log/applicationLogFileZip.%i.log.zip</FileNamePattern>
+            <MinIndex>1</MinIndex>
+            <MaxIndex>10</MaxIndex>
+        </rollingPolicy>
+
+        <triggeringPolicy
+                class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+            <MaxFileSize>1024mb</MaxFileSize>
+        </triggeringPolicy>
+
+    </appender>
+
+    <!-- Application Loggers -->
+    <logger name="com.adarsh.spring" level="DEBUG"/>
+
+
+    <logger name="org" level="DEBUG"/>
+
+    <logger name="com" level="DEBUG" />
+
+
+    <logger name="org.springframework" level="DEBUG"/>
+
+    <logger name="org.springframework.core" level="DEBUG"/>
+
+    <logger name="org.springframework.beans" level="DEBUG"/>
+
+    <logger name="org.springframework.context" level="DEBUG"/>
+
+    <logger name="org.springframework.beans.factory" level="DEBUG"/>
+
+    <logger name="org.springframework.core.env.StandardEnvironment" level="DEBUG"/>
+
+    <logger nam="org.springframework.beans.factory.annotation.InjectionMetadata" level="DEBUG"/>
+
+    <logger nam="org.springframework.core.env.PropertySourcesPropertyResolver" level="DEBUG"/>
+
+
+    <root level="DEBUG">
+        <appender-ref ref="rollingFileAppender"/>
+        <appender-ref ref="consoleAppender"/>
+    </root>
+
+</configuration>

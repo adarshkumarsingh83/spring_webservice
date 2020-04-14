@@ -1,0 +1,7 @@
+1.integrate in tomcat
+2.execute the application
+3.type into the browser
+   http://localhost:8080/SpringJaxWsApplication/message
+
+4.get the wsdl doc
+ http://localhost:8080/SpringJaxWsApplication/message?wsdl

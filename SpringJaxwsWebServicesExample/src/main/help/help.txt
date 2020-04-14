@@ -1,0 +1,5 @@
+in web server
+---------------------------------
+http://localhost:8080/SpringJaxwsWebServicesExample/message
+
+http://localhost:8080/SpringJaxwsWebServicesExample/message?wsdl

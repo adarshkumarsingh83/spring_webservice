@@ -1,0 +1,112 @@
+he hidden file input's "Browse..."
+   * button, so part of the custom button's clickable area will be covered by
+   * the hidden file input's text box instead. This results in a text-selection
+   * mouse cursor over that part of the button, at least in Firefox, which is
+   * confusing to a user. Giving the hidden file input a huge font-size makes
+   * the native button part very large so it will cover the whole clickable area.
+   */
+  font-size: 100px; }
+
+/* line 6, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+.x4-form-cb-wrap {
+  padding-top: 3px; }
+
+/* line 11, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+.x4-form-checkbox,
+.x4-form-radio {
+  vertical-align: -1px;
+  width: 13px;
+  height: 13px;
+  background: no-repeat;
+  background-image: url('../../resources/themes/images/default/form/checkbox.gif');
+  overflow: hidden;
+  padding: 0;
+  border: 0; }
+  /* line 22, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+  .x4-form-checkbox::-moz-focus-inner,
+  .x4-form-radio::-moz-focus-inner {
+    padding: 0;
+    border: 0; }
+
+/* Hack for IE; causes alignment problem in IE9 standards mode so exclude that */
+/* line 31, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+.x4-nbr.x4-ie .x4-form-checkbox,
+.x4-nbr.x4-ie .x4-form-radio {
+  font-size: 0; }
+
+/* line 38, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+.x4-form-cb-checked .x4-form-checkbox,
+.x4-form-cb-checked .x4-form-radio {
+  background-position: 0 -13px; }
+
+/* Focused */
+/* line 44, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+.x4-form-cb-focus {
+  background-position: -13px 0; }
+
+/* line 48, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+.x4-form-cb-checked .x4-form-cb-focus {
+  background-position: -13px -13px; }
+
+/* Radios */
+/* line 54, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+.x4-form-radio {
+  background-image: url('../../resources/themes/images/default/form/radio.gif'); }
+
+/* boxLabel */
+/* line 59, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+.x4-form-cb-label-before {
+  margin-right: 4px; }
+
+/* line 62, ../themes/stylesheets/ext4/default/widgets/form/_checkbox.scss */
+.x4-form-cb-label-after {
+  margin-left: 4px; }
+
+/* line 7, ../themes/stylesheets/ext4/default/widgets/form/_checkboxgroup.scss */
+.x4-form-checkboxgroup-body {
+  padding: 1px 4px 1px 4px; }
+
+/* line 12, ../themes/stylesheets/ext4/default/widgets/form/_checkboxgroup.scss */
+.x4-form-invalid .x4-form-checkboxgroup-body {
+  border: 1px solid #c30!important;
+  background: transparent repeat-x bottom;
+  background-image: url('../../resources/themes/images/default/grid/invalid_line.gif');
+  padding: 1px 3px 0 3px; }
+
+/* line 20, ../themes/stylesheets/ext4/default/widgets/form/_checkboxgroup.scss */
+.x4-check-group-alt {
+  background: #d1ddef;
+  border-top: 1px dotted #b5b8c8;
+  border-bottom: 1px dotted #b5b8c8; }
+
+/* line 27, ../themes/stylesheets/ext4/default/widgets/form/_checkboxgroup.scss */
+.x4-form-check-group-label {
+  color: #333;
+  border-bottom: 1px solid #333;
+  margin: 0 30px 5px 0;
+  padding: 2px; }
+
+/* line 6, ../themes/stylesheets/ext4/default/widgets/form/_triggerfield.scss */
+.x4-form-trigger-wrap {
+  vertical-align: top; }
+
+/* line 10, ../themes/stylesheets/ext4/default/widgets/form/_triggerfield.scss */
+.x4-form-trigger {
+  background-image: url('../../resources/themes/images/default/form/trigger.gif');
+  background-position: 0 0;
+  width: 17px;
+  height: 21px;
+  border-bottom: 1px solid #b5b8c8;
+  cursor: pointer;
+  cursor: hand;
+  overflow: hidden; }
+
+/* line 24, ../themes/stylesheets/ext4/default/widgets/form/_triggerfield.scss */
+.x4-border-box .x4-form-trigger {
+  height: 22px; }
+
+/* line 28, ../themes/stylesheets/ext4/default/widgets/form/_triggerfield.scss */
+.x4-field-default-toolbar .x4-form-trigger {
+  height: 19px; }
+
+/* line 32, ..

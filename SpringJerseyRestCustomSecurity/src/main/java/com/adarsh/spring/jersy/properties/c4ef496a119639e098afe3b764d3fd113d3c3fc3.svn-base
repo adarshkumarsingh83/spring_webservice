@@ -1,0 +1,1617 @@
+package com.merittrac.apollo.testserver.quartz.jobs;
+
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import net.lingala.zip4j.exception.ZipException;
+
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.http.HttpException;
+import org.quartz.Job;
+import org.quartz.JobExecutionContext;
+import org.quartz.JobExecutionException;
+import org.quartz.Scheduler;
+import org.quartz.SchedulerException;
+import org.quartz.Trigger;
+import org.quartz.TriggerKey;
+import org.quartz.impl.StdSchedulerFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.gson.Gson;
+import com.merittrac.apollo.common.HttpClientFactory;
+import com.merittrac.apollo.common.entities.acs.PacksStatusEnum;
+import com.merittrac.apollo.common.entities.deliverymanager.AbstractPackEntity;
+import com.merittrac.apollo.common.entities.deliverymanager.BatchMetaDataBean;
+import com.merittrac.apollo.common.entities.deliverymanager.BpackExportEntity;
+import com.merittrac.apollo.common.entities.deliverymanager.CustomerEventBean;
+import com.merittrac.apollo.common.entities.deliverymanager.DownloadStatus;
+import com.merittrac.apollo.common.entities.deliverymanager.PackContent;
+import com.merittrac.apollo.common.entities.deliverymanager.PackExportEntity;
+import com.merittrac.apollo.common.entities.packgen.ApackExportEntity;
+import com.merittrac.apollo.common.entities.packgen.AssessmentServer;
+import com.merittrac.apollo.common.entities.packgen.QpackExportEntity;
+import com.merittrac.apollo.core.exception.GenericDataModelException;
+import com.merittrac.apollo.testserver.constants.ACSConstants;
+import com.merittrac.apollo.testserver.constants.IncidentAuditLogEnum;
+import com.merittrac.apollo.testserver.constants.PackRequestorStatusEnum;
+import com.merittrac.apollo.testserver.database.tableobject.AssessmentServerConfigTO;
+import com.merittrac.apollo.testserver.database.tableobject.BatchDetailsTO;
+import com.merittrac.apollo.testserver.database.tableobject.PackDetailsTO;
+import com.merittrac.apollo.testserver.database.tableobject.PackRequestorTO;
+import com.merittrac.apollo.testserver.dataobject.audit.IncidentAuditActionDO;
+import com.merittrac.apollo.testserver.exception.ActivationInitiationFailedException;
+import com.merittrac.apollo.testserver.rest.client.ProcessMetadata;
+import com.merittrac.apollo.testserver.services.ACSAdminService;
+import com.merittrac.apollo.testserver.services.ACSService;
+import com.merittrac.apollo.testserver.services.AutomaticPasswordFetchService;
+import com.merittrac.apollo.testserver.services.BatchService;
+import com.merittrac.apollo.testserver.services.CandidateService;
+import com.merittrac.apollo.testserver.services.EODFailureLogService;
+import com.merittrac.apollo.testserver.services.PackDetailsService;
+import com.merittrac.apollo.testserver.services.PackDownloadService;
+import com.merittrac.apollo.testserver.services.PackStatusService;
+import com.merittrac.apollo.testserver.utility.AuditTrailLogger;
+import com.merittrac.apollo.testserver.utility.ChecksumUtil;
+import com.merittrac.apollo.testserver.utility.NetworkUtility;
+import com.merittrac.apollo.testserver.utility.PropertiesUtil;
+import com.merittrac.apollo.testserver.utility.TimeUtil;
+
+/**
+ * Scope of this class is to request the configured DM by sending MAC address of the machine and processes the response.
+ * 
+ * @author Siva_K - MeritTrac Services Pvt. Ltd.
+ * @since Apollo v1.0
+ */
+public class PacksRequestor implements Job {
+	final static Logger logger = LoggerFactory.getLogger(ACSConstants.GENERAL_LOGGER);
+
+	/**
+	 * @return the logger
+	 */
+	public static Logger getLogger() {
+		return logger;
+	}
+
+	static ACSAdminService as = null;
+	static PackDetailsService pds = null;
+	static ProcessMetadata pmd = null;
+	static PackDownloadService pdss = null;
+	static ACSService acss = null;
+	static Gson gson = null;
+	static BPackActivator ba = null;
+	static APackActivator aa = null;
+	static QPackActivator qa = null;
+	static PackStatusService pss = null;
+	private static BatchService bs = null;
+	static CandidateService cs = null;
+	private static AutomaticPasswordFetchService automaticPasswordFetchService;
+
+	private static void initialize() {
+		bs = BatchService.getInstance();
+		if (gson == null)
+			gson = new Gson();
+		if (as == null)
+			as = new ACSAdminService();
+		if (acss == null)
+			acss = new ACSService();
+		if (pds == null)
+			pds = new PackDetailsService();
+		if (pmd == null)
+			pmd = new ProcessMetadata();
+		if (pdss == null)
+			pdss = new PackDownloadService();
+		if (pss == null)
+			pss = new PackStatusService();
+		if (cs == null)
+			cs = new CandidateService();
+		if (automaticPasswordFetchService == null)
+			automaticPasswordFetchService = new AutomaticPasswordFetchService();
+	}
+
+	@Override
+	public void execute(JobExecutionContext context) throws JobExecutionException {
+		initialize();
+		requestPacks();
+	}
+
+	/**
+	 * Requests DM for packs that ACS is entitled for.
+	 */
+	public void requestPacks() {
+		boolean isAutomatedUpload = true;
+		HttpClientFactory httpClientFactory = HttpClientFactory.getInstance();
+		try {
+			List<String> urls = acss.formURL();
+			logger.info("Configured DM URL's = {}", urls);
+			if (urls != null && !urls.isEmpty()) {
+				AssessmentServer assessmentServer = new AssessmentServer();
+				String propValue =
+						PropertiesUtil.getProperty(ACSConstants.DEFAULT_ACS_PROPERTIES, ACSConstants.RANDOM_MAC);
+				if (propValue == null || propValue.isEmpty()) {
+					assessmentServer.setMacAddresses(NetworkUtility.getAllMacs());
+				} else {
+					Set<String> macSet = new HashSet<String>();
+					macSet.add(propValue);
+					assessmentServer.setMacAddresses(macSet);
+				}
+				String param = gson.toJson(assessmentServer);
+				for (Iterator iterator = urls.iterator(); iterator.hasNext();) {
+					String url = (String) iterator.next();
+					logger.info("Sending Mac address = {} and requesting DM = {} for entitled packs", param, url);
+
+					// Gets the JSON representation of PackExportEntity as response from DM.
+					String packsDetails =
+							httpClientFactory.requestPostWithJson(url,
+									ACSConstants.DM_REST_METHOD_IDENTIFIER_FOR_REQUEST_PACKS, param);
+					logger.info("JSON representation of PackExportEntity as response from DM = {}", packsDetails);
+					if (packsDetails != null) {
+						// starts processing the JSON representation of response got from DM
+						processMetadata(packsDetails, isAutomatedUpload, null, true, null, null);
+					}
+				}
+			} else {
+				logger.info("Please check DM server is not configured...");
+			}
+		} catch (Exception ex) {
+			logger.error("Exception while executing requestPacks...", ex);
+		}
+	}
+
+	public boolean processMetadata(String packsDetails, boolean isAutomatedUpload, String manualPacksDir,
+			boolean forceImport, String packCode, String version) throws GenericDataModelException,
+			NoSuchAlgorithmException, IOException, HttpException, ZipException, ActivationInitiationFailedException {
+		initialize();
+		// Converts to PackExportEntity object defined in common-objects.
+		PackExportEntity packExportEntity = new Gson().fromJson(packsDetails, PackExportEntity.class);
+
+		// validates the mac address
+		if (packExportEntity != null && packExportEntity.getAssessmentServer() != null
+				&& packExportEntity.getAssessmentServer().getAssessmentServerCode() != null
+				&& packExportEntity.getAssessmentServer().getMacAddresses() != null
+				&& !packExportEntity.getAssessmentServer().getMacAddresses().isEmpty()) {
+			if (isAutomatedUpload) {
+				if (!applayMACFilter(packExportEntity.getAssessmentServer().getMacAddresses())) {
+					logger.info("Recieved packs are not entitled to this server please check the MAC addresses mentioned in meta data...");
+					return false;
+				}
+
+				// save assessment server related info
+				saveAssessmentServerConfig(packExportEntity.getAssessmentServer());
+
+				// disable cancelled batches
+				logger.info("List of batches to be cancelled = {}", packExportEntity.getCancelledBatchBeans());
+				if (packExportEntity.getCancelledBatchBeans() != null
+						&& !packExportEntity.getCancelledBatchBeans().isEmpty()) {
+					initiateProcesssingOfCancelledBatches(packExportEntity.getCancelledBatchBeans());
+				}
+			}
+		} else {
+			logger.info("Packexportentity has some invalid data please check...");
+			if (!isAutomatedUpload) {
+				if (forceImport) {
+					// auditing the manual upload of packets.
+					Object[] param = { packCode, version, "packexportentity has some invalid data" };
+					pmd.initiateManualUploadAudit(param, ACSConstants.AUDIT_MSG_FORCE_MANUAL_UPLOAD_OF_PACK_FAILED);
+				} else {
+					// auditing the manual upload of packets.
+					Object[] paramArray = { "packexportentity has some invalid data" };
+					pmd.initiateManualUploadAudit(paramArray, ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_FAILED);
+				}
+			}
+			return false;
+		}
+
+		if (packExportEntity.getPacketContents() != null && !packExportEntity.getPacketContents().isEmpty()
+				&& packExportEntity.getCustomerEvent() != null) {
+			// apply's the MAC and event filters
+			if (!validateFilters(packsDetails, packExportEntity, isAutomatedUpload, forceImport, packCode, version)) {
+				return false;
+			}
+
+			String checksum = null;
+			PackRequestorTO packRequestor = null;
+			Set<PackContent> packcontents = packExportEntity.getPacketContents();
+			logger.info("PackContents set = {}", packcontents);
+
+			for (Iterator packIterator = packcontents.iterator(); packIterator.hasNext();) {
+				PackContent packType = (PackContent) packIterator.next();
+				logger.info("Started Processing for = {} ", packType);
+
+				switch (packType) {
+					case Bpack:
+
+						for (Iterator BpackExportEntityIterator = packExportEntity.getBpackExportEntities().iterator(); BpackExportEntityIterator
+								.hasNext();) {
+							BpackExportEntity bpackExportEntity = (BpackExportEntity) BpackExportEntityIterator.next();
+							logger.info("bpackExportEntity = {}", bpackExportEntity);
+							if (bpackExportEntity != null) {
+								if (bpackExportEntity.getVersionNumber() != null
+										&& StringUtils.isNumeric(bpackExportEntity.getVersionNumber())) {
+									// needed because we are maintaining complete meta data so while force
+									// manual upload we
+									// need to process only specific pack
+									if (!isAutomatedUpload
+											&& forceImport
+											&& !(bpackExportEntity.getPackCode().equals(packCode) && bpackExportEntity
+													.getVersionNumber().equals(version))) {
+										continue;
+									}
+
+									// process extended batches.
+									processExtendedBatches(bpackExportEntity.getBatchMetaDataBeans());
+
+									checksum =
+											ChecksumUtil.generateChecksum(removeWhitespaces(bpackExportEntity
+													.toString()));
+									packRequestor =
+											pds.getPackRequestorByPackIdentifierAndVersion(
+													bpackExportEntity.getPackCode(),
+													bpackExportEntity.getVersionNumber());
+
+									if (packRequestor == null) {
+										packRequestor =
+												new PackRequestorTO(packsDetails, checksum,
+														PackRequestorStatusEnum.META_DATA_RECIEVED, packType);
+										packRequestor.setPackIdentifier(bpackExportEntity.getPackCode());
+										packRequestor.setVersionNumber(bpackExportEntity.getVersionNumber());
+										if (isAutomatedUpload)
+											packRequestor.setManualUpload(false);
+										else {
+											packRequestor.setManualUpload(true);
+											packRequestor.setManualUploadDateTime(Calendar.getInstance());
+										}
+										pds.savePackRequestor(packRequestor);
+									}
+
+									// If already activated successfully just ignore
+									if (packRequestor != null
+											&& packRequestor.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATED)) {
+										logger.info(
+												"Recieved = {} having packCode = {} and versionNumber = {} which is already activated hence skipping it...",
+												new Object[] { packType, bpackExportEntity.getPackCode(),
+														bpackExportEntity.getVersionNumber() });
+										pss.notifyPackStatusToDM(bpackExportEntity.getPackStatusUpdateId(),
+												DownloadStatus.ACSCompleted, bpackExportEntity.getVersionNumber());
+										continue;
+									}
+
+									// apply version filter
+									if (!applyVersionFilter(bpackExportEntity.getPackCode(),
+											bpackExportEntity.getVersionNumber(), packRequestor.getPackReqId(),
+											isAutomatedUpload)) {
+										continue;
+									}
+
+									if (packRequestor != null
+											&& (packRequestor.getPackStatus().equals(
+													PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED) || packRequestor
+													.getPackStatus().equals(
+															PackRequestorStatusEnum.ACTIVATION_START_TRIGGERED))) {
+										logger.info(
+												"Recieved = {} having packCode = {} and versionNumber = {} whose activatation is in-progress hence skipping it...",
+												new Object[] { packType, bpackExportEntity.getPackCode(),
+														bpackExportEntity.getVersionNumber() });
+										continue;
+									}
+
+									// Gets the batch codes of those batches for which this pack is
+									// associated with
+									List<String> batchCodes =
+											pmd.parseMetadata(bpackExportEntity, packExportEntity, packType,
+													isAutomatedUpload);
+
+									if (isAutomatedUpload
+											&& packRequestor.getPackStatus().ordinal() < PackRequestorStatusEnum.DOWNLOADED
+													.ordinal()) {
+										// Initiates the download process which will intern start activate the
+										// process
+										pmd.initiateDownload(bpackExportEntity, packExportEntity, packType,
+												packRequestor.getPackReqId(), batchCodes);
+									}
+									if (isAutomatedUpload
+											&& (packRequestor.getPackStatus()
+													.equals(PackRequestorStatusEnum.PASSWORD_FETCHING_FAILED))) {
+										// Initiate the password fetch job
+										try {
+											logger.debug("Pasword fetching has failed. Hence starting the fetch password job");
+											automaticPasswordFetchService.fetchBpackPassword(bpackExportEntity);
+										} catch (Exception e) {
+											logger.error("Exception while executing processMetadata...", e);
+										}
+									}
+
+									if (isAutomatedUpload
+											&& (packRequestor.getPackStatus().equals(
+													PackRequestorStatusEnum.ACTIVATION_FAILED) || packRequestor
+													.getPackStatus().equals(PackRequestorStatusEnum.PASSWORD_FETCHED))) {
+										// Initiates the activation process
+										pmd.initiateActivation(bpackExportEntity, packExportEntity, packType,
+												packRequestor.getPackReqId(), batchCodes);
+									}
+
+									// Do the required file move operation for the manual operation
+									if (!isAutomatedUpload) {
+										// if it is force import no need to copy the pack one more time so
+										// skipping file copy
+										if (!forceImport) {
+											String fileDownloadPath = bpackExportEntity.getPackFileDownloadPath();
+											String filePath =
+													manualPacksDir
+															+ File.separator
+															+ fileDownloadPath.substring(
+																	fileDownloadPath.lastIndexOf("/") + 1,
+																	fileDownloadPath.length());
+
+											// Actual path of the pack
+											File source = new File(filePath);
+
+											// Creating the required destination directory
+											File destinationDirectory =
+													new File(System.getenv("APOLLO_HOME") + File.separator
+															+ ACSConstants.ACS_MODULE_DIR + File.separator
+															+ ACSConstants.ACS_TEMP_DIR + File.separator
+															+ bpackExportEntity.getPackCode());
+
+											try {
+												pds.updatePackRequestStatus(
+														PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED,
+														packRequestor.getPackReqId());
+												pss.updatePackStatus(packType, batchCodes,
+														PacksStatusEnum.DOWNLOAD_IN_PROGRESS, null,
+														bpackExportEntity.getPackCode());
+
+												FileUtils.copyFileToDirectory(source, destinationDirectory);
+
+												// Update the status to download triggered
+												pds.updatePackRequestStatus(PackRequestorStatusEnum.DOWNLOADED,
+														packRequestor.getPackReqId());
+												pss.updatePackStatus(packType, batchCodes, PacksStatusEnum.DOWNLOADED,
+														null, bpackExportEntity.getPackCode());
+											} catch (Exception ex) {
+												// auditing the manual upload of packets.
+												Object[] paramArray =
+														{ bpackExportEntity.getPackCode(),
+																bpackExportEntity.getVersionNumber(), ex.getMessage() };
+												pmd.initiateManualUploadAudit(paramArray,
+														ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_FAILED);
+
+												// added changes for failure logs
+												EODFailureLogService eodFailureLogService = new EODFailureLogService();
+												eodFailureLogService.saveFailureLogs(bpackExportEntity, batchCodes,
+														ex.getMessage(), packType, PacksStatusEnum.DOWNLOAD_FAILED);
+												// end changes for failure logs
+
+												logger.error(
+														"Failed to move file from = {} to = {} for manual upload process...",
+														new Object[] { source.getCanonicalFile(),
+																destinationDirectory.getCanonicalFile(), ex });
+
+												// Update the status to download failed
+												pds.updatePackRequestStatus(PackRequestorStatusEnum.DOWNLOAD_FAILED,
+														packRequestor.getPackReqId());
+												pss.updatePackStatus(packType, batchCodes,
+														PacksStatusEnum.DOWNLOAD_FAILED, ex.getMessage(),
+														bpackExportEntity.getPackCode());
+												continue;
+											}
+										}
+
+										// checks whether batch is expired or batch start time is elapsed if
+										// so skip it
+										if (!applyBatchFilter(bpackExportEntity, packRequestor, forceImport)) {
+											continue;
+										}
+
+										// Initiates the activation process
+										pmd.initiateActivation(bpackExportEntity, packExportEntity, packType,
+												packRequestor.getPackReqId(), batchCodes);
+
+										if (forceImport) {
+											// auditing the force manual upload of packets.
+											Object[] param =
+													{ packRequestor.getPackIdentifier(),
+															packRequestor.getVersionNumber() };
+											pmd.initiateManualUploadAudit(param,
+													ACSConstants.AUDIT_MSG_FORCE_MANUAL_UPLOAD_OF_PACK_SUCCESS);
+										} else {
+											// auditing the manual upload of packets.
+											Object[] paramArray =
+													{ bpackExportEntity.getPackCode(),
+															bpackExportEntity.getVersionNumber() };
+											pmd.initiateManualUploadAudit(paramArray,
+													ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_SUCCESS);
+										}
+									}
+								} else {
+									logger.info("Version number = {} specified is not valid",
+											bpackExportEntity.getVersionNumber());
+								}
+							}
+						}
+						break;
+
+					case Apack:
+
+						if (packExportEntity.getApackExportEntity() != null) {
+							if (packExportEntity.getApackExportEntity().getVersionNumber() != null
+									&& StringUtils
+											.isNumeric(packExportEntity.getApackExportEntity().getVersionNumber())) {
+								// needed because we are maintaining complete meta data so while force
+								// manual upload we
+								// need to process only specific pack
+								if (!isAutomatedUpload
+										&& forceImport
+										&& !(packExportEntity.getApackExportEntity().getPackCode().equals(packCode) && packExportEntity
+												.getApackExportEntity().getVersionNumber().equals(version))) {
+									break;
+								}
+
+								// process extended batches.
+								processExtendedBatches(packExportEntity.getApackExportEntity().getBatchMetaDataBeans());
+
+								// validate whether pack to be ignored or not
+								if (isPackToBeIgnored(packExportEntity.getApackExportEntity().getBatchMetaDataBeans(),
+										packExportEntity.getApackExportEntity().getPackCode())) {
+									getLogger()
+											.info("pack with code = {} is ignored because it is mapped to the current running batches",
+													packExportEntity.getApackExportEntity().getPackCode());
+
+									if (!isAutomatedUpload) {
+										if (forceImport) {
+											// auditing the force manual upload of packets.
+											Object[] param =
+													{
+															packCode,
+															version,
+															"specified pack is mapped to one or more current running batches hence, aborting it now Please try after batch end time" };
+											pmd.initiateManualUploadAudit(param,
+													ACSConstants.AUDIT_MSG_FORCE_MANUAL_UPLOAD_OF_PACK_FAILED);
+										} else {
+											// auditing the manual upload of packets.
+											Object[] paramArray =
+													{ "pack with code = "
+															+ packExportEntity.getApackExportEntity().getPackCode()
+															+ " and version = "
+															+ packExportEntity.getApackExportEntity()
+																	.getVersionNumber()
+															+ " is mapped to one or more current running batches hence, aborting it now Please try after batch end time" };
+											pmd.initiateManualUploadAudit(paramArray,
+													ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_FAILED);
+										}
+									}
+
+									break;
+								}
+
+								checksum =
+										ChecksumUtil.generateChecksum(removeWhitespaces(packExportEntity
+												.getApackExportEntity().toString()));
+								packRequestor =
+										pds.getPackRequestorByPackIdentifierAndVersion(packExportEntity
+												.getApackExportEntity().getPackCode(), packExportEntity
+												.getApackExportEntity().getVersionNumber());
+
+								if (packRequestor == null) {
+									packRequestor =
+											new PackRequestorTO(packsDetails, checksum,
+													PackRequestorStatusEnum.META_DATA_RECIEVED, packType);
+									packRequestor.setPackIdentifier(packExportEntity.getApackExportEntity()
+											.getPackCode());
+									packRequestor.setVersionNumber(packExportEntity.getApackExportEntity()
+											.getVersionNumber());
+									if (isAutomatedUpload)
+										packRequestor.setManualUpload(false);
+									else {
+										packRequestor.setManualUpload(true);
+										packRequestor.setManualUploadDateTime(Calendar.getInstance());
+									}
+									pds.savePackRequestor(packRequestor);
+								}
+
+								// If already activated successfully just ignored
+								if (packRequestor != null
+										&& packRequestor.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATED)) {
+									logger.info(
+											"Recieved = {} having packCode = {} and versionNumber = {} which is already activated hence skipping it...",
+											new Object[] { packType,
+													packExportEntity.getApackExportEntity().getPackCode(),
+													packExportEntity.getApackExportEntity().getVersionNumber() });
+									pss.notifyPackStatusToDM(packExportEntity.getApackExportEntity()
+											.getPackStatusUpdateId(), DownloadStatus.ACSCompleted, packExportEntity
+											.getApackExportEntity().getVersionNumber());
+									break;
+								}
+
+								// apply version filter
+								if (!applyVersionFilter(packExportEntity.getApackExportEntity().getPackCode(),
+										packExportEntity.getApackExportEntity().getVersionNumber(),
+										packRequestor.getPackReqId(), isAutomatedUpload)) {
+									break;
+								}
+
+								if (packRequestor != null
+										&& (packRequestor.getPackStatus().equals(
+												PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED) || packRequestor
+												.getPackStatus().equals(
+														PackRequestorStatusEnum.ACTIVATION_START_TRIGGERED))) {
+									logger.info(
+											"Recieved = {} having packCode = {} and versionNumber = {} whose activatation is in-progress hence skipping it...",
+											new Object[] { packType,
+													packExportEntity.getApackExportEntity().getPackCode(),
+													packExportEntity.getApackExportEntity().getVersionNumber() });
+									break;
+								}
+
+								// commented because apack is at event level so skipping batch level
+								// validation
+								// if (!forceImport &&
+								// applyBatchFilter(packExportEntity.getApackExportEntity(), packRequestor))
+								// {
+								// break;
+								// }
+
+								// Gets the batch codes of those batches for which this pack is
+								// associated with
+								List<String> batchCodes =
+										pmd.parseMetadata(packExportEntity.getApackExportEntity(), packExportEntity,
+												packType, isAutomatedUpload);
+
+								if (isAutomatedUpload
+										&& packRequestor.getPackStatus().ordinal() < PackRequestorStatusEnum.DOWNLOADED
+												.ordinal()) {
+									// Initiates the download process which will intern start activate the
+									// process
+									pmd.initiateDownload(packExportEntity.getApackExportEntity(), packExportEntity,
+											packType, packRequestor.getPackReqId(), batchCodes);
+								}
+								if (isAutomatedUpload
+										&& (packRequestor.getPackStatus()
+												.equals(PackRequestorStatusEnum.PASSWORD_FETCHING_FAILED))) {
+									// Initiate the password fetch job
+									try {
+										logger.debug("Pasword fetching has failed. Hence starting the fetch password job");
+										automaticPasswordFetchService.fetchApackPassword(packExportEntity
+												.getApackExportEntity());
+									} catch (Exception e) {
+										logger.error("Exception while executing processMetadata...", e);
+									}
+									continue;
+								}
+
+								if (isAutomatedUpload
+										&& packRequestor.getPackStatus().equals(
+												PackRequestorStatusEnum.ACTIVATION_FAILED)
+										|| packRequestor.getPackStatus().equals(
+												PackRequestorStatusEnum.PASSWORD_FETCHED)) {
+									// Initiates the activation process
+									pmd.initiateActivation(packExportEntity.getApackExportEntity(), packExportEntity,
+											packType, packRequestor.getPackReqId(), batchCodes);
+								}
+
+								// Do the required file move operation for the manual operation
+								if (!isAutomatedUpload) {
+									// if it is force import no need to copy the pack one more time so
+									// skipping file copy
+									if (!forceImport) {
+										String fileDownloadPath =
+												packExportEntity.getApackExportEntity().getPackFileDownloadPath();
+										String filePath =
+												manualPacksDir
+														+ File.separator
+														+ fileDownloadPath.substring(
+																fileDownloadPath.lastIndexOf("/") + 1,
+																fileDownloadPath.length());
+
+										// Actual path of the pack
+										File source = new File(filePath);
+
+										// Creating the required destination directory
+										File destinationDirectory =
+												new File(System.getenv("APOLLO_HOME") + File.separator
+														+ ACSConstants.ACS_MODULE_DIR + File.separator
+														+ ACSConstants.ACS_TEMP_DIR + File.separator
+														+ packExportEntity.getApackExportEntity().getPackCode());
+
+										try {
+											pds.updatePackRequestStatus(
+													PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED,
+													packRequestor.getPackReqId());
+											pss.updatePackStatus(packType, batchCodes,
+													PacksStatusEnum.DOWNLOAD_IN_PROGRESS, null, packExportEntity
+															.getApackExportEntity().getPackCode());
+
+											FileUtils.copyFileToDirectory(source, destinationDirectory);
+
+											// Update the status to download triggered
+											pds.updatePackRequestStatus(PackRequestorStatusEnum.DOWNLOADED,
+													packRequestor.getPackReqId());
+											pss.updatePackStatus(packType, batchCodes, PacksStatusEnum.DOWNLOADED,
+													null, packExportEntity.getApackExportEntity().getPackCode());
+										} catch (Exception ex) {
+											// auditing the manual upload of packets.
+											Object[] paramArray =
+													{ packExportEntity.getApackExportEntity().getPackCode(),
+															packExportEntity.getApackExportEntity().getVersionNumber(),
+															ex.getMessage() };
+											pmd.initiateManualUploadAudit(paramArray,
+													ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_FAILED);
+
+											// added changes for failure logs
+											EODFailureLogService eodFailureLogService = new EODFailureLogService();
+											eodFailureLogService.saveFailureLogs(
+													packExportEntity.getApackExportEntity(), batchCodes,
+													ex.getMessage(), packType, PacksStatusEnum.DOWNLOAD_FAILED);
+											// end changes for failure logs
+
+											logger.error(
+													"Failed to move file from = {} to = {} for manual upload process...",
+													new Object[] { source.getCanonicalFile(),
+															destinationDirectory.getCanonicalFile(), ex });
+
+											// Update the status to download failed
+											pds.updatePackRequestStatus(PackRequestorStatusEnum.DOWNLOAD_FAILED,
+													packRequestor.getPackReqId());
+											pss.updatePackStatus(packType, batchCodes, PacksStatusEnum.DOWNLOAD_FAILED,
+													ex.getMessage(), packExportEntity.getApackExportEntity()
+															.getPackCode());
+											break;
+										}
+									}
+
+									// Initiates the activation process
+									pmd.initiateActivation(packExportEntity.getApackExportEntity(), packExportEntity,
+											packType, packRequestor.getPackReqId(), batchCodes);
+
+									if (forceImport) {
+										// auditing the manual upload of packets.
+										Object[] param =
+												{ packRequestor.getPackIdentifier(), packRequestor.getVersionNumber() };
+										pmd.initiateManualUploadAudit(param,
+												ACSConstants.AUDIT_MSG_FORCE_MANUAL_UPLOAD_OF_PACK_SUCCESS);
+									} else {
+										// auditing the manual upload of packets.
+										Object[] paramArray =
+												{ packExportEntity.getApackExportEntity().getPackCode(),
+														packExportEntity.getApackExportEntity().getVersionNumber() };
+										pmd.initiateManualUploadAudit(paramArray,
+												ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_SUCCESS);
+									}
+								}
+							} else {
+								logger.info("Version number = {} specified is not valid", packExportEntity
+										.getApackExportEntity().getVersionNumber());
+							}
+						}
+						break;
+
+					case Qpack:
+						for (Iterator QpackExportEntityIterator = packExportEntity.getQpackExportEntities().iterator(); QpackExportEntityIterator
+								.hasNext();) {
+							QpackExportEntity qpackExportEntity = (QpackExportEntity) QpackExportEntityIterator.next();
+							logger.info("qpackExportEntity = {}", qpackExportEntity);
+
+							if (qpackExportEntity != null) {
+								if (qpackExportEntity.getVersionNumber() != null
+										&& StringUtils.isNumeric(qpackExportEntity.getVersionNumber())) {
+									// needed because we are maintaining complete meta data so while force
+									// manual upload we
+									// need to process only specific pack
+									if (!isAutomatedUpload
+											&& forceImport
+											&& !(qpackExportEntity.getPackCode().equals(packCode) && qpackExportEntity
+													.getVersionNumber().equals(version))) {
+										continue;
+									}
+
+									// process extended batches.
+									processExtendedBatches(qpackExportEntity.getBatchMetaDataBeans());
+
+									checksum =
+											ChecksumUtil.generateChecksum(removeWhitespaces(qpackExportEntity
+													.toString()));
+									packRequestor =
+											pds.getPackRequestorByPackIdentifierAndVersion(
+													qpackExportEntity.getPackCode(),
+													qpackExportEntity.getVersionNumber());
+
+									if (packRequestor == null) {
+										packRequestor =
+												new PackRequestorTO(packsDetails, checksum,
+														PackRequestorStatusEnum.META_DATA_RECIEVED, packType);
+										packRequestor.setPackIdentifier(qpackExportEntity.getPackCode());
+										packRequestor.setVersionNumber(qpackExportEntity.getVersionNumber());
+										if (isAutomatedUpload)
+											packRequestor.setManualUpload(false);
+										else {
+											packRequestor.setManualUpload(true);
+											packRequestor.setManualUploadDateTime(Calendar.getInstance());
+										}
+										pds.savePackRequestor(packRequestor);
+									}
+
+									// If already activated successfully just ignored
+									if (packRequestor != null
+											&& (packRequestor.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATED))) {
+										logger.info(
+												"Recieved = {} having packCode = {} and versionNumber = {} which is already activated hence skipping it...",
+												new Object[] { packType, qpackExportEntity.getPackCode(),
+														qpackExportEntity.getVersionNumber() });
+										pss.notifyPackStatusToDM(qpackExportEntity.getPackStatusUpdateId(),
+												DownloadStatus.ACSCompleted, qpackExportEntity.getVersionNumber());
+										continue;
+									}
+
+									if (packRequestor != null
+											&& (packRequestor.getPackStatus().equals(
+													PackRequestorStatusEnum.PASSWORD_FETCHED) || packRequestor
+													.getPackStatus().equals(
+															PackRequestorStatusEnum.PASSWORDFETCH_IN_PROGRESS))) {
+										logger.info("Password fetch is in progress or password fetched already hence skipping it");
+										continue;
+									}
+
+									// apply version filter
+									if (!applyVersionFilter(qpackExportEntity.getPackCode(),
+											qpackExportEntity.getVersionNumber(), packRequestor.getPackReqId(),
+											isAutomatedUpload)) {
+										continue;
+									}
+
+									if (packRequestor != null
+											&& (packRequestor.getPackStatus().equals(
+													PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED) || packRequestor
+													.getPackStatus().equals(
+															PackRequestorStatusEnum.ACTIVATION_START_TRIGGERED))) {
+										logger.info(
+												"Recieved = {} having packCode = {} and versionNumber = {} whose activatation is in-progress hence skipping it...",
+												new Object[] { packType, qpackExportEntity.getPackCode(),
+														qpackExportEntity.getVersionNumber() });
+										continue;
+									}
+
+									// Gets the batch codes of those batches for which this pack is
+									// associated with
+									List<String> batchCodes =
+											pmd.parseMetadata(qpackExportEntity, packExportEntity, packType,
+													isAutomatedUpload);
+
+									if (isAutomatedUpload
+											&& packRequestor.getPackStatus().ordinal() < PackRequestorStatusEnum.DOWNLOADED
+													.ordinal()) {
+										// Initiates the download process which will intern start activate the
+										// process
+										pmd.initiateDownload(qpackExportEntity, packExportEntity, packType,
+												packRequestor.getPackReqId(), batchCodes);
+									}
+									if (isAutomatedUpload
+											&& (packRequestor.getPackStatus()
+													.equals(PackRequestorStatusEnum.PASSWORD_FETCHING_FAILED))) {
+										// Initiate the password fetch job
+										try {
+											logger.debug("Pasword fetching has failed. Hence starting the fetch password job");
+											automaticPasswordFetchService.fetchQpackPassword(packExportEntity
+													.getQpackExportEntity());
+										} catch (Exception e) {
+											logger.error("Exception while executing processMetadata...", e);
+										}
+									}
+
+									if (isAutomatedUpload
+											&& packRequestor.getPackStatus().equals(
+													PackRequestorStatusEnum.ACTIVATION_FAILED)
+											|| packRequestor.getPackStatus().equals(
+													PackRequestorStatusEnum.PASSWORD_FETCHED)) {
+										// Initiates the activation process
+										pmd.initiateActivation(qpackExportEntity, packExportEntity, packType,
+												packRequestor.getPackReqId(), batchCodes);
+									}
+
+									// Do the required file move operation for the manual operation
+									if (!isAutomatedUpload) {
+										// if it is force import no need to copy the pack one more time so
+										// skipping file copy
+										if (!forceImport) {
+											String fileDownloadPath = qpackExportEntity.getPackFileDownloadPath();
+											String filePath =
+													manualPacksDir
+															+ File.separator
+															+ fileDownloadPath.substring(
+																	fileDownloadPath.lastIndexOf("/") + 1,
+																	fileDownloadPath.length());
+
+											// Actual path of the pack
+											File source = new File(filePath);
+
+											// Creating the required destination directory
+											File destinationDirectory =
+													new File(System.getenv("APOLLO_HOME") + File.separator
+															+ ACSConstants.ACS_MODULE_DIR + File.separator
+															+ ACSConstants.ACS_TEMP_DIR + File.separator
+															+ qpackExportEntity.getPackCode());
+
+											try {
+												pds.updatePackRequestStatus(
+														PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED,
+														packRequestor.getPackReqId());
+												pss.updatePackStatus(packType, batchCodes,
+														PacksStatusEnum.DOWNLOAD_IN_PROGRESS, null,
+														qpackExportEntity.getPackCode());
+
+												FileUtils.copyFileToDirectory(source, destinationDirectory);
+
+												// Update the status to download triggered
+												pds.updatePackRequestStatus(PackRequestorStatusEnum.DOWNLOADED,
+														packRequestor.getPackReqId());
+												pss.updatePackStatus(packType, batchCodes, PacksStatusEnum.DOWNLOADED,
+														null, qpackExportEntity.getPackCode());
+											} catch (Exception ex) {
+												// auditing the manual upload of packets.
+												Object[] paramArray =
+														{ qpackExportEntity.getPackCode(),
+																qpackExportEntity.getVersionNumber(), ex.getMessage() };
+												pmd.initiateManualUploadAudit(paramArray,
+														ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_FAILED);
+
+												// added changes for failure logs
+												EODFailureLogService eodFailureLogService = new EODFailureLogService();
+												eodFailureLogService.saveFailureLogs(qpackExportEntity, batchCodes,
+														ex.getMessage(), packType, PacksStatusEnum.DOWNLOAD_FAILED);
+												// end changes for failure logs
+
+												logger.error(
+														"Failed to move file from = {} to = {} for manual upload process...",
+														new Object[] { source.getCanonicalFile(),
+																destinationDirectory.getCanonicalFile(), ex });
+
+												// Update the status to download failed
+												pds.updatePackRequestStatus(PackRequestorStatusEnum.DOWNLOAD_FAILED,
+														packRequestor.getPackReqId());
+												pss.updatePackStatus(packType, batchCodes,
+														PacksStatusEnum.DOWNLOAD_FAILED, ex.getMessage(),
+														qpackExportEntity.getPackCode());
+												continue;
+											}
+										}
+
+										// checks whether batch is expired or batch start time is elapsed if
+										// so skip it
+										if (!applyBatchFilter(qpackExportEntity, packRequestor, forceImport)) {
+											continue;
+										}
+										// Initiates the activation process
+										pmd.initiateActivation(qpackExportEntity, packExportEntity, packType,
+												packRequestor.getPackReqId(), batchCodes);
+
+										if (forceImport) {
+											// auditing the manual upload of packets.
+											Object[] param =
+													{ packRequestor.getPackIdentifier(),
+															packRequestor.getVersionNumber() };
+											pmd.initiateManualUploadAudit(param,
+													ACSConstants.AUDIT_MSG_FORCE_MANUAL_UPLOAD_OF_PACK_SUCCESS);
+										} else {
+											// auditing the manual upload of packets.
+											Object[] paramArray =
+													{ qpackExportEntity.getPackCode(),
+															qpackExportEntity.getVersionNumber() };
+											pmd.initiateManualUploadAudit(paramArray,
+													ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_SUCCESS);
+										}
+									}
+								} else {
+									logger.info("Version number = {} specified is not valid",
+											qpackExportEntity.getVersionNumber());
+								}
+							}
+						}
+						break;
+					default:
+						logger.info("No such pack type specified = {} ", packType);
+						break;
+				}
+			}
+		} else {
+			logger.info("Pack Content set or Customer event details in Packexportentity has some invalid data please check...");
+			return false;
+		}
+		return true;
+	}
+
+	public boolean saveAssessmentServerConfig(AssessmentServer assessmentServer) throws GenericDataModelException {
+		// Save assessment server related info.
+		AssessmentServerConfigTO assessmentServerConfig = acss.getAssessmentServerConfig();
+		if (assessmentServerConfig == null) {
+			assessmentServerConfig =
+					new AssessmentServerConfigTO(assessmentServer.getAssessmentServerName(),
+							assessmentServer.getAssessmentServerCode(), assessmentServer.getCityName(),
+							assessmentServer.getCityCode(), assessmentServer.getVenueName(),
+							assessmentServer.getVenueCode(), assessmentServer.getPlayerCount());
+			assessmentServerConfig.setRequestId(assessmentServer.getRequestId());
+			try {
+				assessmentServerConfig = fillMacIds(assessmentServerConfig, assessmentServer.getMacAddresses());
+			} catch (Exception ex) {
+				logger.error("Exception while executing saveAssessmentServerConfig(unable to parse mac addresses)...",
+						ex);
+			}
+
+			acss.saveAssessmentServerConfig(assessmentServerConfig);
+		} else {
+			assessmentServerConfig.setAssessmentServerCode(assessmentServer.getAssessmentServerCode());
+			assessmentServerConfig.setAssessmentServerName(assessmentServer.getAssessmentServerName());
+			assessmentServerConfig.setCityCode(assessmentServer.getCityCode());
+			assessmentServerConfig.setCityName(assessmentServer.getCityName());
+			assessmentServerConfig.setVenueCode(assessmentServer.getVenueCode());
+			assessmentServerConfig.setVenueName(assessmentServer.getVenueName());
+			assessmentServerConfig.setPlayerCount(assessmentServer.getPlayerCount());
+			assessmentServerConfig.setRequestId(assessmentServer.getRequestId());
+			try {
+				assessmentServerConfig = fillMacIds(assessmentServerConfig, assessmentServer.getMacAddresses());
+			} catch (Exception ex) {
+				logger.error("Exception while executing saveAssessmentServerConfig(unable to parse mac addresses)...",
+						ex);
+			}
+
+			acss.UpdateAssessmentServerConfig(assessmentServerConfig);
+		}
+		return false;
+	}
+
+	public AssessmentServerConfigTO fillMacIds(AssessmentServerConfigTO assessmentServerConfig, Set<String> macs)
+			throws Exception {
+		int i = 1;
+		Class requiredClass = Class.forName(ACSConstants.ASSESSMENTSERVERCONFIGTO_PACKAGE_STRUCTURE);
+		Method[] declaredMethods = requiredClass.getDeclaredMethods();
+		Map<String, Method> methodNames = new HashMap<String, Method>();
+		for (Method method : declaredMethods) {
+			methodNames.put(method.getName(), method);
+		}
+		for (Iterator iterator = macs.iterator(); iterator.hasNext();) {
+			String macId = (String) iterator.next();
+			if (methodNames.containsKey(ACSConstants.ASSESSMENTSERVERCONFIGTO_MACID_SETTER_METHOD + i)) {
+				methodNames.get(ACSConstants.ASSESSMENTSERVERCONFIGTO_MACID_SETTER_METHOD + i).invoke(
+						assessmentServerConfig, macId);
+				i++;
+			}
+		}
+		return assessmentServerConfig;
+	}
+
+	public String removeWhitespaces(String packDetails) {
+		String patternStr = "\\s+";
+		String replaceStr = "";
+		Pattern pattern = Pattern.compile(patternStr);
+		Matcher matcher = pattern.matcher(packDetails);
+		return matcher.replaceAll(replaceStr);
+	}
+
+	public boolean applayMACFilter(Set<String> Macs) {
+		try {
+			Set<String> macAddrs = NetworkUtility.getAllMacs();
+			logger.info("Active MACs = {}", macAddrs);
+			if (macAddrs.isEmpty()) {
+				logger.info("Unable to validate MAC addresses because there are no active networks hence aborting the process...");
+				return false;
+			}
+			for (Iterator iterator = Macs.iterator(); iterator.hasNext();) {
+				String mac = (String) iterator.next();
+				if (macAddrs.contains(mac)) {
+					return true;
+				}
+			}
+		} catch (Exception ex) {
+			logger.error("Exception while executing isEntitledPack hence unable to read MACs...", ex);
+		}
+		return false;
+	}
+
+	public boolean applyEventFilter(CustomerEventBean customerEventBean) {
+		Calendar currentDateTime = Calendar.getInstance();
+		if (currentDateTime.after(customerEventBean.getEventEndDate())) {
+			return false;
+		}
+		return true;
+	}
+
+	public boolean applyBatchFilter(AbstractPackEntity abstractPackEntity, PackRequestorTO packRequestor,
+			boolean forceImport) throws GenericDataModelException {
+		if (abstractPackEntity.getBatchMetaDataBeans() == null || abstractPackEntity.getBatchMetaDataBeans().isEmpty()) {
+			logger.info("BatchMetaDataBeans is = {} hence aborting because unable to validate batch date times");
+			return false;
+		}
+
+		Calendar currentDateTime = Calendar.getInstance();
+		List<String> elapsedBatchCodes = new ArrayList<String>();
+		List<String> expiredBatchCodes = new ArrayList<String>();
+		for (Iterator iterator = abstractPackEntity.getBatchMetaDataBeans().iterator(); iterator.hasNext();) {
+			BatchMetaDataBean batchMetaDataBean = (BatchMetaDataBean) iterator.next();
+
+			// checks for expired batches i.e whose batch end time is over
+			if (currentDateTime.after(batchMetaDataBean.getBatchEndTime())) {
+				expiredBatchCodes.add(batchMetaDataBean.getBatchCode());
+				continue;
+			}
+			// checks for start time elapsed batches i.e whose batch start time is over but not the end time
+			if (currentDateTime.after(batchMetaDataBean.getBatchStartTime())
+					&& currentDateTime.before(batchMetaDataBean.getBatchEndTime())) {
+				elapsedBatchCodes.add(batchMetaDataBean.getBatchCode());
+			}
+		}
+		if (!forceImport && !elapsedBatchCodes.isEmpty()) {
+			logger.info("Batch start times are elapsed for batches having codes = {}", elapsedBatchCodes);
+
+			// auditing the manual upload of packets.
+			Object[] paramArray =
+					{ packRequestor.getPackIdentifier(), packRequestor.getVersionNumber(),
+							"batch start times are elapsed for batches having codes" + elapsedBatchCodes.toString() };
+			pmd.initiateManualUploadAudit(paramArray, ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_FAILED);
+
+			pds.updatePackRequestStatus(PackRequestorStatusEnum.BATCH_START_TIME_ELAPSED, packRequestor.getPackReqId());
+			return false;
+		}
+		if (!expiredBatchCodes.isEmpty()) {
+			logger.info("Batches having codes = {} are expired", expiredBatchCodes);
+
+			if (forceImport) {
+				// auditing the manual upload of packets.
+				Object[] param =
+						{ packRequestor.getPackIdentifier(), packRequestor.getVersionNumber(),
+								"batches having codes = " + expiredBatchCodes.toString() + " are expired" };
+				pmd.initiateManualUploadAudit(param, ACSConstants.AUDIT_MSG_FORCE_MANUAL_UPLOAD_OF_PACK_FAILED);
+			} else {
+				// auditing the manual upload of packets.
+				Object[] paramArray =
+						{ packRequestor.getPackIdentifier(), packRequestor.getVersionNumber(),
+								"batches having codes = " + expiredBatchCodes.toString() + " are expired" };
+				pmd.initiateManualUploadAudit(paramArray, ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_FAILED);
+			}
+
+			pds.updatePackRequestStatus(PackRequestorStatusEnum.BATCH_EXPIRED, packRequestor.getPackReqId());
+			return false;
+		}
+		return true;
+	}
+
+	public boolean validateFilters(String packsDetails, PackExportEntity packExportEntity, boolean isAutomatedUpload,
+			boolean forceImport, String packCode, String version) throws NoSuchAlgorithmException,
+			GenericDataModelException {
+		String checksum = null;
+		PackRequestorTO packRequestor = null;
+		List<Integer> packIds = new ArrayList<Integer>();
+
+		// iterate through all the packs in meta data and create a status record packRequestor table
+		for (Iterator iterator = packExportEntity.getPacketContents().iterator(); iterator.hasNext();) {
+			PackContent packType = (PackContent) iterator.next();
+			switch (packType) {
+				case Bpack:
+
+					for (Iterator BpackExportEntityIterator = packExportEntity.getBpackExportEntities().iterator(); BpackExportEntityIterator
+							.hasNext();) {
+						BpackExportEntity bpackExportEntity = (BpackExportEntity) BpackExportEntityIterator.next();
+						if (bpackExportEntity != null) {
+							// needed because we are maintaining complete meta data so while force
+							// manual upload we
+							// need to process only specific pack
+							if (!isAutomatedUpload
+									&& forceImport
+									&& !(bpackExportEntity.getPackCode().equals(packCode) && bpackExportEntity
+											.getVersionNumber().equals(version))) {
+								continue;
+							}
+
+							checksum = ChecksumUtil.generateChecksum(removeWhitespaces(bpackExportEntity.toString()));
+							packRequestor =
+									pds.getPackRequestorByPackIdentifierAndVersion(bpackExportEntity.getPackCode(),
+											bpackExportEntity.getVersionNumber());
+
+							// If already activated successfully just ignore
+							if (packRequestor != null
+									&& packRequestor.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATED)) {
+								logger.info(
+										"Recieved = {} having packCode = {} and versionNumber = {} which is already activated hence skipping it...",
+										new Object[] { packType, bpackExportEntity.getPackCode(),
+												bpackExportEntity.getVersionNumber() });
+								continue;
+							}
+
+							if (packRequestor != null
+									&& (packRequestor.getPackStatus().equals(
+											PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED) || packRequestor
+											.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATION_START_TRIGGERED))) {
+								logger.info(
+										"Recieved = {} having packCode = {} and versionNumber = {} whose download or activatation is in-progress hence skipping it...",
+										new Object[] { packType, bpackExportEntity.getPackCode(),
+												bpackExportEntity.getVersionNumber() });
+								continue;
+							}
+
+							if (packRequestor == null) {
+								packRequestor =
+										new PackRequestorTO(packsDetails, checksum,
+												PackRequestorStatusEnum.META_DATA_RECIEVED, packType);
+								packRequestor.setPackIdentifier(bpackExportEntity.getPackCode());
+								packRequestor.setVersionNumber(bpackExportEntity.getVersionNumber());
+								if (isAutomatedUpload)
+									packRequestor.setManualUpload(false);
+								else {
+									packRequestor.setManualUpload(true);
+									packRequestor.setManualUploadDateTime(Calendar.getInstance());
+								}
+								pds.savePackRequestor(packRequestor);
+							}
+							packIds.add(packRequestor.getPackReqId());
+						} else {
+							logger.info("Bpack meta data is missing...");
+						}
+					}
+					break;
+				case Qpack:
+
+					for (Iterator QpackExportEntityIterator = packExportEntity.getQpackExportEntities().iterator(); QpackExportEntityIterator
+							.hasNext();) {
+						QpackExportEntity qpackExportEntity = (QpackExportEntity) QpackExportEntityIterator.next();
+						if (qpackExportEntity != null) {
+							// needed because we are maintaining complete meta data so while force
+							// manual upload we
+							// need to process only specific pack
+							if (!isAutomatedUpload
+									&& forceImport
+									&& !(qpackExportEntity.getPackCode().equals(packCode) && qpackExportEntity
+											.getVersionNumber().equals(version))) {
+								continue;
+							}
+
+							checksum = ChecksumUtil.generateChecksum(removeWhitespaces(qpackExportEntity.toString()));
+							packRequestor =
+									pds.getPackRequestorByPackIdentifierAndVersion(qpackExportEntity.getPackCode(),
+											qpackExportEntity.getVersionNumber());
+
+							// If already activated successfully just ignore
+							if (packRequestor != null
+									&& packRequestor.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATED)) {
+								logger.info(
+										"Recieved = {} having packCode = {} and versionNumber = {} which is already activated hence skipping it...",
+										new Object[] { packType, qpackExportEntity.getPackCode(),
+												qpackExportEntity.getVersionNumber() });
+								continue;
+							}
+
+							if (packRequestor != null
+									&& (packRequestor.getPackStatus().equals(
+											PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED) || packRequestor
+											.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATION_START_TRIGGERED))) {
+								logger.info(
+										"Recieved = {} having packCode = {} and versionNumber = {} whose download or activatation is in-progress hence skipping it...",
+										new Object[] { packType, qpackExportEntity.getPackCode(),
+												qpackExportEntity.getVersionNumber() });
+								continue;
+							}
+
+							if (packRequestor == null) {
+								packRequestor =
+										new PackRequestorTO(packsDetails, checksum,
+												PackRequestorStatusEnum.META_DATA_RECIEVED, packType);
+								packRequestor.setPackIdentifier(qpackExportEntity.getPackCode());
+								packRequestor.setVersionNumber(qpackExportEntity.getVersionNumber());
+								if (isAutomatedUpload)
+									packRequestor.setManualUpload(false);
+								else {
+									packRequestor.setManualUpload(true);
+									packRequestor.setManualUploadDateTime(Calendar.getInstance());
+								}
+								pds.savePackRequestor(packRequestor);
+							}
+							packIds.add(packRequestor.getPackReqId());
+						} else {
+							logger.info("Qpack meta data is missing...");
+						}
+					}
+					break;
+				case Apack:
+
+					ApackExportEntity apackExportEntity = packExportEntity.getApackExportEntity();
+					if (apackExportEntity != null) {
+						// needed because we are maintaining complete meta data so while force
+						// manual upload we
+						// need to process only specific pack
+						if (!isAutomatedUpload
+								&& forceImport
+								&& !(apackExportEntity.getPackCode().equals(packCode) && apackExportEntity
+										.getVersionNumber().equals(version))) {
+							break;
+						}
+
+						checksum = ChecksumUtil.generateChecksum(removeWhitespaces(apackExportEntity.toString()));
+						packRequestor =
+								pds.getPackRequestorByPackIdentifierAndVersion(apackExportEntity.getPackCode(),
+										apackExportEntity.getVersionNumber());
+
+						// If already activated successfully just ignore
+						if (packRequestor != null
+								&& packRequestor.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATED)) {
+							logger.info(
+									"Recieved = {} having packCode = {} and versionNumber = {} which is already activated hence skipping it...",
+									new Object[] { packType, apackExportEntity.getPackCode(),
+											apackExportEntity.getVersionNumber() });
+							break;
+						}
+
+						if (packRequestor != null
+								&& (packRequestor.getPackStatus().equals(
+										PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED) || packRequestor
+										.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATION_START_TRIGGERED))) {
+							logger.info(
+									"Recieved = {} having packCode = {} and versionNumber = {} whose download or activatation is in-progress hence skipping it...",
+									new Object[] { packType, apackExportEntity.getPackCode(),
+											apackExportEntity.getVersionNumber() });
+							break;
+						}
+
+						if (packRequestor == null) {
+							packRequestor =
+									new PackRequestorTO(packsDetails, checksum,
+											PackRequestorStatusEnum.META_DATA_RECIEVED, packType);
+							packRequestor.setPackIdentifier(apackExportEntity.getPackCode());
+							packRequestor.setVersionNumber(apackExportEntity.getVersionNumber());
+							if (isAutomatedUpload)
+								packRequestor.setManualUpload(false);
+							else {
+								packRequestor.setManualUpload(true);
+								packRequestor.setManualUploadDateTime(Calendar.getInstance());
+							}
+							pds.savePackRequestor(packRequestor);
+						}
+						packIds.add(packRequestor.getPackReqId());
+					} else {
+						logger.info("Apack meta data is missing...");
+					}
+					break;
+				default:
+					logger.info("No such pack type specified = {} ", packType);
+					break;
+			}
+		}
+
+		if (!isAutomatedUpload) {
+			// validates the mac address
+			if (!applayMACFilter(packExportEntity.getAssessmentServer().getMacAddresses())) {
+				logger.info("Recieved packs are not entitled to this server please check the MAC addresses mentioned in meta data...");
+				if (forceImport) {
+					// auditing the force manual upload of packets.
+					Object[] param = { packCode, version, "uploaded packs are not entitled to this server" };
+					pmd.initiateManualUploadAudit(param, ACSConstants.AUDIT_MSG_FORCE_MANUAL_UPLOAD_OF_PACK_FAILED);
+				} else {
+					// auditing the manual upload of packets.
+					Object[] paramArray = { "uploaded packs are not entitled to this server" };
+					pmd.initiateManualUploadAudit(paramArray, ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_FAILED);
+				}
+				pds.updatePackRequestorByPackIds(packIds, PackRequestorStatusEnum.REJECTED);
+				return false;
+			}
+			// save assessment server related info
+			saveAssessmentServerConfig(packExportEntity.getAssessmentServer());
+
+			// disable cancelled batches
+			logger.info("List of batches to be cancelled = {}", packExportEntity.getCancelledBatchBeans());
+			if (packExportEntity.getCancelledBatchBeans() != null
+					&& !packExportEntity.getCancelledBatchBeans().isEmpty()) {
+				initiateProcesssingOfCancelledBatches(packExportEntity.getCancelledBatchBeans());
+			}
+		}
+
+		// check if the event is already expired or still valid
+		if (!applyEventFilter(packExportEntity.getCustomerEvent())) {
+			logger.info("End date is elapsed for event having code = {}, please check...", packExportEntity
+					.getCustomerEvent().getEventCode());
+			if (!isAutomatedUpload) {
+				if (forceImport) {
+					// auditing the force manual upload of packets.
+					Object[] param =
+							{
+									packCode,
+									version,
+									"mentioned event with code = " + packExportEntity.getCustomerEvent().getEventCode()
+											+ " is expired" };
+					pmd.initiateManualUploadAudit(param, ACSConstants.AUDIT_MSG_FORCE_MANUAL_UPLOAD_OF_PACK_FAILED);
+				} else {
+					// auditing the manual upload of packets.
+					Object[] paramArray =
+							{ "mentioned event with code = " + packExportEntity.getCustomerEvent().getEventCode()
+									+ " is expired" };
+					pmd.initiateManualUploadAudit(paramArray, ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_FAILED);
+				}
+			}
+			pds.updatePackRequestorByPackIds(packIds, PackRequestorStatusEnum.EVENT_EXPIRED);
+			return false;
+		}
+		return true;
+	}
+
+	public boolean applyVersionFilter(String packCode, String version, int packReqId, boolean isAutomatedUpload)
+			throws GenericDataModelException {
+		PackRequestorTO packRequestor = pds.getLatestPackRequestorByPackIdentifier(packCode);
+		if (packRequestor == null) {
+			logger.info(
+					"No pack info is availble for specified packCode = {} hence processing it further considering it as new pack...",
+					packCode);
+			return true;
+		}
+
+		if (packRequestor.getVersionNumber() != null && version != null
+				&& StringUtils.isNumeric(packRequestor.getVersionNumber()) && StringUtils.isNumeric(version)) {
+			int currentVersion = Integer.parseInt(packRequestor.getVersionNumber());
+			int newVersion = Integer.parseInt(version);
+
+			if (currentVersion > newVersion) {
+				logger.info("Aborting the process because existing version = {} is greater than new version = {}",
+						currentVersion, newVersion);
+
+				if (!isAutomatedUpload) {
+					// auditing the manual upload of packets.
+					Object[] paramArray = { packCode, version, "already a higher version of this pack is activated" };
+					pmd.initiateManualUploadAudit(paramArray, ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_FAILED);
+				}
+
+				pds.updatePackRequestStatus(PackRequestorStatusEnum.NEWER_VERSION_EXISTS, packReqId);
+				return false;
+			} else if (currentVersion == newVersion
+					&& (packRequestor.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATED) || packRequestor
+							.getPackStatus().equals(PackRequestorStatusEnum.VERSION_EXISTS_AND_ACTIVATED))) {
+				logger.info("Aborting the process because pack having code = {} with specified version = {} is already activated successfully...");
+
+				if (!isAutomatedUpload) {
+					// auditing the manual upload of packets.
+					Object[] paramArray = { packCode, version, "pack with mentioned version is already activated" };
+					pmd.initiateManualUploadAudit(paramArray, ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_FAILED);
+				}
+
+				pds.updatePackRequestStatus(PackRequestorStatusEnum.VERSION_EXISTS_AND_ACTIVATED, packReqId);
+				return false;
+			} else if (currentVersion == newVersion
+					&& (packRequestor.getPackStatus().equals(PackRequestorStatusEnum.ACTIVATION_START_TRIGGERED) || packRequestor
+							.getPackStatus().equals(PackRequestorStatusEnum.DOWNLOAD_START_TRIGGERED))) {
+				logger.info("Aborting the process because pack having code = {} with specified version = {} is already in progress");
+
+				if (!isAutomatedUpload) {
+					// auditing the manual upload of packets.
+					Object[] paramArray = { packCode, version, "pack with mentioned version is already uploaded" };
+					pmd.initiateManualUploadAudit(paramArray, ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_FAILED);
+				}
+
+				return false;
+			} else {
+				logger.info("Recieved existing pack which is not activated so, processing it further...");
+			}
+		} else {
+			logger.info("Version number(current version = {} or new version = {}) is either is null or non numeric",
+					packRequestor.getVersionNumber(), version);
+
+			if (!isAutomatedUpload) {
+				// auditing the manual upload of packets.
+				Object[] paramArray = { packCode, version, "version number is invalid" };
+				pmd.initiateManualUploadAudit(paramArray, ACSConstants.AUDIT_MSG_MANUAL_UPLOAD_OF_PACK_FAILED);
+			}
+
+			pds.updatePackRequestStatus(PackRequestorStatusEnum.INVALID_VERSION, packReqId);
+			return false;
+		}
+		return true;
+	}
+
+	public boolean processExtendedBatches(Set<BatchMetaDataBean> batchMetaDataBeans) throws GenericDataModelException {
+		for (Iterator iterator = batchMetaDataBeans.iterator(); iterator.hasNext();) {
+			BatchMetaDataBean batchMetaDataBean = (BatchMetaDataBean) iterator.next();
+			if (batchMetaDataBean.isBatchExtended()) {
+				BatchDetailsTO batchDetails =
+						bs.getBatchDetailsbyBatchCodeAndEndTime(batchMetaDataBean.getBatchCode(),
+								batchMetaDataBean.getBatchEndTime());
+				if (batchDetails != null) {
+					logger.info("Batch exist with specified batchCode = {}, hence processing batch extension",
+							batchMetaDataBean.getBatchCode());
+
+					// audit for incident log
+					IncidentAuditActionDO incidentAuditAction =
+							new IncidentAuditActionDO(NetworkUtility.getIp(), TimeUtil.convertTimeAsString(Calendar
+									.getInstance().getTimeInMillis(), TimeUtil.DISPLAY_DATE_FORMAT),
+									IncidentAuditLogEnum.BATCH_EXTENTION, batchMetaDataBean.getBatchCode(),
+									TimeUtil.convertTimeAsString(batchDetails.getBatchEndTime().getTimeInMillis(),
+											TimeUtil.DISPLAY_DATE_FORMAT), TimeUtil.convertTimeAsString(
+											batchMetaDataBean.getBatchEndTime().getTimeInMillis(),
+											TimeUtil.DISPLAY_DATE_FORMAT),
+									TimeUnit.MILLISECONDS.toMinutes(batchMetaDataBean.getBatchEndTime()
+											.getTimeInMillis() - batchDetails.getBatchEndTime().getTimeInMillis()));
+
+					AuditTrailLogger.incidentAudit(incidentAuditAction);
+
+					batchDetails.setBatchEndTime(batchMetaDataBean.getBatchEndTime());
+					bs.updateBatchDetails(batchDetails, true, null);
+					// bs.updateBatchEndTime(batchMetaDataBean.getBatchEndTime(), batchDetails.getBatchId());
+					cs.startCandidateForceSubmitJob(batchMetaDataBean.getBatchEndTime(), batchDetails.getBatchId(),
+							true);
+					cs.startCandidateHeartBeatJob(batchDetails.getBatchStartTime(),
+							batchMetaDataBean.getBatchEndTime(), batchDetails.getBatchId(), true);
+					cs.startPlayerHeartBeatJob(batchDetails.getBatchStartTime(), batchMetaDataBean.getBatchEndTime(),
+							batchDetails.getBatchId(), true);
+					cs.startSystemHeartBeatJob(batchDetails.getBatchStartTime(), batchMetaDataBean.getBatchEndTime(),
+							batchDetails.getBatchId(), true);
+					cs.startCandidtaeLiveStatusInitiator(batchDetails.getBatchId(), batchDetails.getBatchCode(),
+							batchDetails.getBatchStartTime(), batchDetails.getBatchEndTime(), true);
+					logger.info("Updated batchEndTime to = {} for batch with code = {}",
+							batchMetaDataBean.getBatchEndTime(), batchMetaDataBean.getBatchCode());
+				} else {
+					logger.info("No batch exist with specified batchCode = {}, hence skipping extending batchEndTime",
+							batchMetaDataBean.getBatchCode());
+				}
+			} else {
+				logger.info("Batch with code = {} is not extended", batchMetaDataBean.getBatchCode());
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * cancel the batches with specified batch codes along with that it initiates wipe out for these batches and
+	 * unscheduled all the jobs those are associated to the mentioned batch codes.
+	 * 
+	 * @param cancelledBatchCodes
+	 * @return
+	 * @throws GenericDataModelException
+	 * 
+	 * @since Apollo v2.0
+	 * @see
+	 */
+	public boolean processCancelledBatches(List<String> cancelledBatchCodes) throws GenericDataModelException {
+		getLogger().info("Initiated cancellation for the batches with batch codes = {}", cancelledBatchCodes);
+		List<Integer> batchIds = bs.getBatchIdsListByBatchCodes(cancelledBatchCodes);
+		if (batchIds != null && !batchIds.isEmpty()) {
+			int cancelledBatchesCount = bs.disableCancelledBatches(batchIds);
+			if (cancelledBatchesCount > 0) {
+				logger.info("Disabled = {} batches with codes = {} successfully", cancelledBatchesCount,
+						cancelledBatchCodes);
+			} else {
+				logger.info("No batches exists with mentioned batch codes = {}", cancelledBatchCodes);
+				return false;
+			}
+
+			// Initiate wipe out for all the cancelled batches
+			pds.initiatePacksWipeOut(batchIds, Calendar.getInstance(), true);
+
+			try {
+				Scheduler scheduler = new StdSchedulerFactory().getScheduler();
+				scheduler.start();
+				for (Iterator<Integer> iterator = batchIds.iterator(); iterator.hasNext();) {
+					Integer batchId = iterator.next();
+					// Disable all the jobs related to this batch
+					Map<String, String> jobs = new HashMap<String, String>();
+					jobs.put(ACSConstants.CAND_HB_NAME + batchId, ACSConstants.CAND_HB_GRP);
+					jobs.put(ACSConstants.PLAYER_HB_NAME + batchId, ACSConstants.PLAYER_HB_GRP);
+					jobs.put(ACSConstants.SYS_HB_NAME + batchId, ACSConstants.SYS_HB_GRP);
+					jobs.put(ACSConstants.CAND_FORCE_SUBMIT_NAME + batchId, ACSConstants.CAND_FORCE_SUBMIT_GRP);
+					jobs.put(ACSConstants.RESPONSE_REPORT_GENERATOR_INITIATOR_NAME + batchId,
+							ACSConstants.RESPONSE_REPORT_GENERATOR_INITIATOR_GRP);
+					jobs.put(ACSConstants.RESPONSE_REPORT_GENERATOR_AT_AET_NAME + batchId,
+							ACSConstants.RESPONSE_REPORT_GENERATOR_AT_AET_GRP);
+					jobs.put(ACSConstants.RESPONSE_REPORT_GENERATOR_AT_BET_NAME + batchId,
+							ACSConstants.RESPONSE_REPORT_GENERATOR_AT_BET_GRP);
+					jobs.put(ACSConstants.IS_ALL_CANDS_SUBMITTED_TEST_NAME + batchId,
+							ACSConstants.IS_ALL_CANDS_SUBMITTED_TEST_GRP);
+					jobs.put(ACSConstants.CDB_CANDIDATE_LIVE_STATUS_INITIATOR_NAME + batchId,
+							ACSConstants.CDB_CANDIDATE_LIVE_STATUS_INITIATOR_GRP);
+					jobs.put(ACSConstants.ATTENDANCE_REPORT_GENARATOR_NAME + batchId,
+							ACSConstants.ATTENDANCE_REPORT_GENARATOR_GRP);
+
+					unScheduleJobs(scheduler, jobs);
+				}
+			} catch (SchedulerException e) {
+				logger.error("SchedulerException while executing processCancelledBatches...", e);
+			}
+		}
+		return true;
+	}
+
+	public boolean unScheduleJobs(Scheduler scheduler, Map<String, String> jobs) {
+		for (Map.Entry<String, String> entry : jobs.entrySet()) {
+			try {
+				Trigger trigger = scheduler.getTrigger(TriggerKey.triggerKey(entry.getKey(), entry.getValue()));
+				if (trigger != null) {
+					scheduler.unscheduleJob(TriggerKey.triggerKey(entry.getKey(), entry.getValue()));
+				}
+			} catch (SchedulerException e) {
+				logger.error("SchedulerException while executing unScheduleJob...", e);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * checks whether the specified pack to be considered for processing or not. this is mainly for handling APACK
+	 * processing for a batch while that batch is going on
+	 * 
+	 * @return {@link Boolean} : boolean value which says that the specified pack has to be ignored or not
+	 * @since Apollo v2.0
+	 */
+	public boolean isPackToBeIgnored(Set<BatchMetaDataBean> batchMetaDataBeans, String packCode) {
+		boolean isPackToBeIgnored = false;
+		getLogger()
+				.info("initiated isPackToBeIgnored where input params : batchMetaDataBeans = {}", batchMetaDataBeans);
+
+		try {
+			PackDetailsTO packDetailsTO = pds.getPackDetailsbyPackIdentifier(packCode);
+			if (packDetailsTO != null) {
+				// get the batch codes for those batches which are running at current time
+				List<String> batchCodes = bs.getBatchCodesbyTimeInstance();
+				getLogger().info("List of batches which are running currently = {}", batchCodes);
+
+				if (batchCodes != null && !batchCodes.isEmpty()) {
+					for (Iterator iterator = batchMetaDataBeans.iterator(); iterator.hasNext();) {
+						BatchMetaDataBean batchMetaDataBean = (BatchMetaDataBean) iterator.next();
+						// check whether any of the current running batch codes are related to the new pack if contains
+						// dont
+						// process the pack
+						if (batchCodes.contains(batchMetaDataBean.getBatchCode())) {
+							getLogger()
+									.info("New APACK has come which is linked to current running batch with batchCode = {} hence, ignoring the pack",
+											batchMetaDataBean.getBatchCode());
+							isPackToBeIgnored = true;
+							break;
+						}
+					}
+				} else {
+					getLogger().info("There are no batches which are running currently");
+				}
+			} else {
+				getLogger().info("No such pack exists with specified pack code = {}, hence processing it", packCode);
+			}
+		} catch (GenericDataModelException e) {
+			getLogger().error("GenericDataModelException while executing isPackToBeIgnored...", e);
+		}
+		return isPackToBeIgnored;
+	}
+
+	/**
+	 * this method initiates the processing of cancelled batches.
+	 * 
+	 * @param cancelledbatchMetaDataBeans
+	 * @throws GenericDataModelException
+	 * 
+	 * @since Apollo v2.0
+	 */
+	public void initiateProcesssingOfCancelledBatches(List<BatchMetaDataBean> cancelledbatchMetaDataBeans)
+			throws GenericDataModelException {
+		getLogger().info("initiated initiateProcesssingOfCancelledBatches where cancelledbatchMetaDataBeans = {}",
+				cancelledbatchMetaDataBeans);
+
+		// iterate through the list of cancelledbatchMetaDataBeans and form a list of batch codes
+		List<String> cancelledBatchCodes = new ArrayList<String>();
+		for (Iterator iterator = cancelledbatchMetaDataBeans.iterator(); iterator.hasNext();) {
+			BatchMetaDataBean batchMetaDataBean = (BatchMetaDataBean) iterator.next();
+			if (batchMetaDataBean != null) {
+				cancelledBatchCodes.add(batchMetaDataBean.getBatchCode());
+			}
+		}
+		getLogger().info("batch codes list for the cancelled batches = {}", cancelledBatchCodes);
+
+		// check whether there are any cancelled batches if so initiate processing them.
+		if (!cancelledBatchCodes.isEmpty()) {
+			// initiate processing the cancelled batches
+			processCancelledBatches(cancelledBatchCodes);
+			getLogger().info("initiated cancellation process for batches with codes = {}", cancelledBatchCodes);
+		} else {
+			getLogger().info("No batch cancellation info available");
+		}
+	}
+}

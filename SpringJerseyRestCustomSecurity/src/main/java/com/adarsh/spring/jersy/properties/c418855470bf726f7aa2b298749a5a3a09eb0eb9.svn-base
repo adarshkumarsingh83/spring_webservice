@@ -1,0 +1,45 @@
+/**
+ * 
+ * Copyright © MeritTrac Services Pvt. Ltd. All Rights Reserved.
+ * 
+ * Last modified by: 2:48:48 PM - Jai_S
+ * 
+ */
+package com.merittrac.apollo.qpd.qti;
+
+import java.io.File;
+
+import org.junit.Ignore;
+import org.junit.Test;
+import org.qtitools.qti.node.item.AssessmentItem;
+
+import com.merittrac.apollo.common.XMLUtility;
+
+/**
+ * 
+ * 
+ * @author Jai_S - MeritTrac Services Pvt. Ltd.
+ * @since Apollo v1.0
+ * @see
+ */
+public class ResultProcessingTagExclusion {
+	XMLUtility xmlUtil = new XMLUtility();
+
+	@Ignore
+	@Test
+	public void testRpTagExclusion() {
+		excludeTest(
+				"D:\\Apollo coding\\QPD_Qpapers\\mtqpd\\Qpools\\Qpack_A1_Qpt_1_Group18_Version_1\\items_PG\\Q1.xml",
+				true);
+	}
+
+	public void excludeTest(String url, boolean exclude) {
+		AssessmentItem itemOld = new AssessmentItem();
+		itemOld.load(new File(url));
+		// itemOld.setResponseProcessing(null);
+		String xmlStr = itemOld.toXmlString();
+		System.out.println(xmlStr);
+		// xmlUtil.createXmlFile(xmlStr, FilenameUtils.removeExtension(url));
+	}
+
+}
