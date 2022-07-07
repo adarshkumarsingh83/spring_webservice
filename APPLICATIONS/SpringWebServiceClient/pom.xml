@@ -11,7 +11,7 @@
     <name>rest web service client</name>
     <description>Dell Ad Content Server</description>
     <properties>
-        <spring.version>3.0.7.RELEASE</spring.version>
+        <spring.version>3.2.5.RELEASE</spring.version>
         <spring-security.version>3.0.7.RELEASE</spring-security.version>
         <aspectj.version>1.6.12</aspectj.version>
         <jars.dir>/jars</jars.dir>
