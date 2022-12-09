@@ -31,7 +31,7 @@
         <project.name>SpringJaxRsDownloadApplication</project.name>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <java.version>1.7</java.version>
-        <spring.version>3.0.5.RELEASE</spring.version>
+        <spring.version>6.0.0</spring.version>
         <jersey.version>1.8</jersey.version>
         <jersey.version.spring>1.8</jersey.version.spring>
         <servlet.version>3.0-alpha-1</servlet.version>
